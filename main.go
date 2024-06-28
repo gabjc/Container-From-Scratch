@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"syscall"
 )
 
@@ -25,7 +28,6 @@ func main() {
 }
 
 func run() {
-
 	fmt.Printf("Running %v as %d\n", os.Args[2:], os.Getpid())
 
 	// Running the executable or command
@@ -35,7 +37,7 @@ func run() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Setting up flags to allow new contianer to be made, and to prevent sharing the filesystem to the host
+	// Setting up flags for namespaces to allow new contianer to be made, and to prevent sharing the filesystem to the host
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags:   syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 		Unshareflags: syscall.CLONE_NEWNS,
@@ -46,25 +48,13 @@ func run() {
 		fmt.Printf("Err: %v", err)
 		os.Exit(1)
 	}
-
-	// command := os.Args[3]
-	// args := os.Args[4:len(os.Args)]
-	// cmd := exec.Command(command, args...)
-
-	// cmd.Stdin = os.Stdin
-	// cmd.Stdout = os.Stdout
-	// cmd.Stderr = os.Stderr
-
-	// err := cmd.Run()
-	// if err != nil {
-	// 	fmt.Printf("Err: %v", err)
-	// 	os.Exit(1)
-	// }
 }
 
 func child() {
-
 	fmt.Printf("Running %v as %d\n", os.Args[2:], os.Getpid())
+
+	controlgroup()
+
 	//For setting the container name
 	syscall.Sethostname([]byte("container"))
 
@@ -87,4 +77,29 @@ func child() {
 	}
 
 	syscall.Unmount("/proc", 0)
+}
+
+// Create the control group for the container, limiting what the container can use
+func controlgroup() {
+	cgroups := "/sys/fs/cgroup/"
+	pids := filepath.Join(cgroups, "pids")
+
+	err := os.MkdirAll(filepath.Join(pids, "gab"), 0755)
+	if err != nil && !os.IsExist(err) {
+		panic(err)
+	}
+
+	// Limits the processes to 20
+	must(ioutil.WriteFile(filepath.Join(pids, "gab/pids.max"), []byte("20"), 0700))
+
+	//Removes the new cgroup in place after the container exits
+	must(ioutil.WriteFile(filepath.Join(pids, "gab/notify_on_release"), []byte("1"), 0700))
+	must(ioutil.WriteFile(filepath.Join(pids, "gab/cgroup.procs"), []byte(strconv.Itoa(os.Getpid())), 0700))
+
+}
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
 }
